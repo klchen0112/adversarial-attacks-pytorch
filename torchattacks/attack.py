@@ -253,6 +253,7 @@ class Attack(object):
         return_verbose=False,
         save_predictions=False,
         save_clean_inputs=False,
+        save_labels=False,
         save_type="float",
     ):
         r"""
@@ -270,7 +271,8 @@ class Attack(object):
         """
         if save_path is not None:
             adv_input_list = []
-            label_list = []
+            if save_labels:
+                label_list = []
             if save_predictions:
                 pred_list = []
             if save_clean_inputs:
@@ -278,7 +280,9 @@ class Attack(object):
 
         correct = 0
         total = 0
-        l2_distance = []
+        l2_distance_total = 0
+        linf_distance_total = 0
+        wrong_label = 0
 
         total_batch = len(data_loader)
         given_training = self.model.training
@@ -299,15 +303,21 @@ class Attack(object):
                     correct += right_idx.sum()
                     rob_acc = 100 * float(correct) / total
 
+                    inputs_inver = self.inverse_normalize(inputs)
+                    adv_inptus_inver = self.inverse_normalize(adv_inputs)
                     # Calculate l2 distance
-                    delta = (adv_inputs - inputs.to(self.device)).view(
+                    delta = (adv_inptus_inver - inputs_inver.to(self.device)).view(
                         batch_size, -1
                     )  # nopep8
-                    l2_distance.append(
-                        torch.norm(delta[~right_idx], p=2, dim=1)
-                    )  # nopep8
-                    l2 = torch.cat(l2_distance).mean().item()
+                    l2_distance_total += torch.norm(
+                        delta[~right_idx], p=2, dim=1
+                    ).sum().item()
+                    linf_distance_total += torch.norm(
+                        delta[~right_idx], p=float("inf"), dim=1
+                    ).sum().item()
 
+                    l2 = l2_distance_total / (total - correct)
+                    linf = linf_distance_total / (total - correct)
                     # Calculate time computation
                     progress = (step + 1) / total_batch * 100
                     end = time.time()
@@ -315,12 +325,13 @@ class Attack(object):
 
                     if verbose:
                         self._save_print(
-                            progress, rob_acc, l2, elapsed_time, end="\r"
+                            progress, rob_acc, l2, linf, elapsed_time, end="\r"
                         )  # nopep8
 
             if save_path is not None:
                 adv_input_list.append(adv_inputs.detach().cpu())
-                label_list.append(labels.detach().cpu())
+                if save_labels:
+                    label_list.append(labels.detach().cpu())
                 if save_predictions:
                     pred_list.append(pred.detach().cpu())
                 if save_clean_inputs:
@@ -331,23 +342,23 @@ class Attack(object):
                         save_path,
                         adv_input_list,
                         label_list,
-                        save_predictions = save_predictions,
-                        pred_list = pred_list if save_predictions else None,
-                        save_clean_inputs = save_clean_inputs,
-                        input_list = input_list if save_clean_inputs else None,
+                        save_predictions=save_predictions,
+                        pred_list=pred_list if save_predictions else None,
+                        save_clean_inputs=save_clean_inputs,
+                        input_list=input_list if save_clean_inputs else None,
                     )
 
         if save_path is not None and not save_every_iter:
             self._save_adv_examples(
-                        save_type,
-                        save_path,
-                        adv_input_list,
-                        label_list,
-                        save_predictions = save_predictions,
-                        pred_list = pred_list if save_predictions else None,
-                        save_clean_inputs = save_clean_inputs,
-                        input_list = input_list if save_clean_inputs else None,
-                    )
+                save_type,
+                save_path,
+                adv_input_list,
+                label_list,
+                save_predictions=save_predictions,
+                pred_list=pred_list if save_predictions else None,
+                save_clean_inputs=save_clean_inputs,
+                input_list=input_list if save_clean_inputs else None,
+            )
 
         # To avoid erasing the printed information.
         if verbose:
@@ -378,19 +389,17 @@ class Attack(object):
             raise ValueError(type + " is not a valid type. [Options: float, int]")
         return inputs
 
-
     def _save_adv_examples(
         self,
         save_type,
         save_path,
         adv_input_list,
         label_list,
-        save_predictions = False,
-        pred_list = [],
-        save_clean_inputs = False,
-        input_list = [],
-        ):
-
+        save_predictions=False,
+        pred_list=[],
+        save_clean_inputs=False,
+        input_list=[],
+    ):
 
         adv_input_list_cat = torch.cat(adv_input_list, 0)
         label_list_cat = torch.cat(label_list, 0)
@@ -430,10 +439,10 @@ class Attack(object):
         torch.save(save_dict, save_path)
 
     @staticmethod
-    def _save_print(progress, rob_acc, l2, elapsed_time, end):
+    def _save_print(progress, rob_acc, l2, linf, elapsed_time, end):
         print(
-            "- Save progress: %2.2f %% / Robust accuracy: %2.2f %% / L2: %1.5f (%2.3f it/s) \t"
-            % (progress, rob_acc, l2, elapsed_time),
+            "- Save progress: %2.2f %% / Robust accuracy: %2.2f %% / L2: %1.5f Linf: %1.5f (%2.3f it/s) \t"
+            % (progress, rob_acc, l2, linf, elapsed_time),
             end=end,
         )
 
