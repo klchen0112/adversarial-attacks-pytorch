@@ -280,9 +280,11 @@ class Attack(object):
 
         correct = 0
         total = 0
+        l0_distance_total = 0
+        l1_distance_total = 0
         l2_distance_total = 0
         linf_distance_total = 0
-        wrong_label = 0
+
 
         total_batch = len(data_loader)
         given_training = self.model.training
@@ -302,22 +304,28 @@ class Attack(object):
                     right_idx = pred == labels.to(self.device)
                     correct += right_idx.sum()
                     rob_acc = 100 * float(correct) / total
-
-                    inputs_inver = self.inverse_normalize(inputs)
-                    adv_inptus_inver = self.inverse_normalize(adv_inputs)
+                    if self._normalization_applied is True:
+                        inputs_inver = self.inverse_normalize(inputs)
+                        adv_inptus_inver = self.inverse_normalize(adv_inputs)
+                    else:
+                        inputs_inver = inputs
+                        adv_inptus_inver = adv_inputs
                     # Calculate l2 distance
                     delta = (adv_inptus_inver - inputs_inver.to(self.device)).view(
                         batch_size, -1
                     )  # nopep8
+                    l0_distance_total +=  torch.count_nonzero(delta).item()
+                    l1_distance_total += torch.sum(torch.abs(delta)).item()
                     l2_distance_total += torch.norm(
                         delta[~right_idx], p=2, dim=1
                     ).sum().item()
                     linf_distance_total += torch.norm(
                         delta[~right_idx], p=float("inf"), dim=1
                     ).sum().item()
-
-                    l2 = l2_distance_total / (total - correct)
-                    linf = linf_distance_total / (total - correct)
+                    l0 = l0_distance_total / (total)
+                    l1 = l1_distance_total / (total)
+                    l2 = l2_distance_total / (total )
+                    linf = linf_distance_total / (total )
                     # Calculate time computation
                     progress = (step + 1) / total_batch * 100
                     end = time.time()
@@ -325,7 +333,8 @@ class Attack(object):
 
                     if verbose:
                         self._save_print(
-                            progress, rob_acc, l2, linf, elapsed_time, end="\r"
+                            type(self).__name__,
+                            progress, rob_acc, l0,l1,l2, linf, elapsed_time, end="\r"
                         )  # nopep8
 
             if save_path is not None:
@@ -341,7 +350,7 @@ class Attack(object):
                         save_type,
                         save_path,
                         adv_input_list,
-                        label_list,
+                        label_list if save_labels else None,
                         save_predictions=save_predictions,
                         pred_list=pred_list if save_predictions else None,
                         save_clean_inputs=save_clean_inputs,
@@ -353,7 +362,7 @@ class Attack(object):
                 save_type,
                 save_path,
                 adv_input_list,
-                label_list,
+                label_list if save_labels else None,
                 save_predictions=save_predictions,
                 pred_list=pred_list if save_predictions else None,
                 save_clean_inputs=save_clean_inputs,
@@ -362,13 +371,13 @@ class Attack(object):
 
         # To avoid erasing the printed information.
         if verbose:
-            self._save_print(progress, rob_acc, l2, elapsed_time, end="\n")
+            self._save_print(type(self).__name__,progress, rob_acc,l0,l1, l2,linf, elapsed_time, end="\n")
 
         if given_training:
             self.model.train()
 
         if return_verbose:
-            return rob_acc, l2, elapsed_time
+            return rob_acc, l0,l1,l2,linf, elapsed_time
 
     @staticmethod
     def to_type(inputs, type):
@@ -400,14 +409,18 @@ class Attack(object):
         save_clean_inputs=False,
         input_list=[],
     ):
-
         adv_input_list_cat = torch.cat(adv_input_list, 0)
-        label_list_cat = torch.cat(label_list, 0)
-
         save_dict = {
             "adv_inputs": adv_input_list_cat,
-            "labels": label_list_cat,
+
         }
+
+
+        if label_list:
+            label_list_cat = torch.cat(label_list, 0)
+            save_dict["labels"] =  label_list_cat
+
+
 
         if save_predictions:
             pred_list_cat = torch.cat(pred_list, 0)
@@ -439,10 +452,10 @@ class Attack(object):
         torch.save(save_dict, save_path)
 
     @staticmethod
-    def _save_print(progress, rob_acc, l2, linf, elapsed_time, end):
+    def _save_print(atk_name,progress, rob_acc,l0,l1, l2, linf, elapsed_time, end):
         print(
-            "- Save progress: %2.2f %% / Robust accuracy: %2.2f %% / L2: %1.5f Linf: %1.5f (%2.3f it/s) \t"
-            % (progress, rob_acc, l2, linf, elapsed_time),
+            "- %s Save progress: %2.2f %% / Robust accuracy: %2.2f %% / L0: %1.5f L1: %1.5f L2: %1.5f Linf: %1.5f (%2.3f it/s) \t"
+            % (atk_name,progress, rob_acc,l0,l1, l2, linf, elapsed_time),
             end=end,
         )
 
